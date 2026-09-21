@@ -239,6 +239,28 @@ fn parse_tool(
     } else {
         &state["result"]
     };
+    if let Some(files) = result.get("files").and_then(Value::as_array) {
+        for file in files {
+            let Some(path) = string(file, &["filePath", "path", "file"]) else {
+                continue;
+            };
+            if file.get("patch").and_then(Value::as_str).is_some()
+                || file.get("diff").and_then(Value::as_str).is_some()
+                || file.get("unified_diff").and_then(Value::as_str).is_some()
+            {
+                c.result(name, &state["input"], file, time, id, model.clone());
+            } else {
+                c.push(
+                    path,
+                    crate::evidence::Change::Unknown,
+                    time,
+                    id,
+                    model.clone(),
+                );
+            }
+        }
+        return;
+    }
     if let Some(filediff) = result.get("filediff") {
         c.result(name, &state["input"], filediff, time, id, model);
     } else {

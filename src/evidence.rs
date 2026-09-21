@@ -284,7 +284,8 @@ pub fn attribute(
             if forward {
                 t > target.commit_time && t <= now
             } else {
-                t <= target.commit_time && target.parent_time.is_none_or(|p| t > p)
+                t <= target.commit_time
+                    && (target.before.is_empty() || target.parent_time.is_none_or(|p| t > p))
             }
         }
         None => {
@@ -292,9 +293,10 @@ pub fn attribute(
                 started.is_some_and(|t| t > target.commit_time && t <= now)
             } else {
                 updated.is_some_and(|t| t <= target.commit_time)
-                    && target
-                        .parent_time
-                        .is_none_or(|p| started.is_some_and(|t| t > p))
+                    && (target.before.is_empty()
+                        || target
+                            .parent_time
+                            .is_none_or(|p| started.is_some_and(|t| t > p)))
             }
         }
     };
