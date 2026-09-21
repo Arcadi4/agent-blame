@@ -27,7 +27,10 @@ fn models(a: Option<&Attribution>) -> String {
 fn clean(text: &str) -> String {
     text.chars()
         .flat_map(|ch| {
-            if ch.is_control() {
+            // Tabs are meaningful source indentation and are safe to emit in
+            // a terminal line. Escape the remaining controls so they cannot
+            // split or manipulate terminal output.
+            if ch.is_control() && ch != '\t' {
                 ch.escape_default().collect::<Vec<_>>()
             } else {
                 vec![ch]
