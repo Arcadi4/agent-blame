@@ -111,10 +111,13 @@ impl Repo {
         } else {
             cwd.join(file)
         });
-        let file = absolute
-            .strip_prefix(&root)
-            .context("target file is outside the Git worktree")?
-            .to_path_buf();
+        let file = absolute.strip_prefix(&root).map(Path::to_path_buf).map_err(|_| {
+            anyhow::anyhow!(
+                "target file '{}' belongs to a different Git worktree than the current directory ('{}'); run agent-blame from that repository",
+                absolute.display(),
+                root.display()
+            )
+        })?;
         ensure!(!file.as_os_str().is_empty(), "target must be a file");
         let mut rev = if operands.len() == 2 {
             operands[0].clone()
