@@ -1,0 +1,30 @@
+[package]
+name = "agent-blame"
+version = "0.1.0"
+edition = "2024"
+description = "The git blame of agents. See who's to blame for this slop code."
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+bstr = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+ignore = "0.4"
+memchr = "2"
+owo-colors = { version = "4", features = ["supports-colors"] }
+rayon = "1"
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+similar = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true
+
