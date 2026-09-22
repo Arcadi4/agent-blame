@@ -1,10 +1,10 @@
 use super::{
     Candidate, Source, Stats, database,
-    jsonl::{Collector, stamp, string},
+    jsonl::{Collector, codex_patch, stamp, string},
 };
 use crate::{
     cli::Agent,
-    evidence::History,
+    evidence::{Change, History},
     git::{Repo, Target},
 };
 use anyhow::Result;
@@ -232,6 +232,7 @@ fn parse_tool(
     let time = stamp(&tool["time"]["created"])
         .or_else(|| stamp(&state["time"]["start"]))
         .or(fallback_time);
+    let input = &state["input"];
     let result = if state["structured"].is_object() {
         &state["structured"]
     } else if state["metadata"].is_object() {
@@ -239,6 +240,51 @@ fn parse_tool(
     } else {
         &state["result"]
     };
+    // Per-file results below already describe the same call; input pairs and
+    // native patches only add evidence when those are absent.
+    let snapshot = result
+        .get("files")
+        .and_then(Value::as_array)
+        .is_some_and(|a| !a.is_empty())
+        || result.get("filediff").is_some();
+    if name == "edit"
+        && !snapshot
+        && let (Some(old), Some(new)) = (input["oldString"].as_str(), input["newString"].as_str())
+    {
+        let old = old.trim_end_matches('\n');
+        let new = new.trim_end_matches('\n');
+        if !old.is_empty()
+            && !new.is_empty()
+            && old != new
+            && let Some(path) = string(input, &["filePath", "path", "file"])
+            && c.push(
+                path,
+                Change::Fragments(vec![(old.into(), new.into())]),
+                time,
+                id,
+                model.clone(),
+            )
+        {
+            return;
+        }
+    }
+    // apply_patch carries the native patch in its input; the completed
+    // status confirms it. Parse per-file fragments like Codex patches.
+    // Unproven parses fall through to per-file results below.
+    if name == "apply_patch"
+        && !snapshot
+        && let Some(patch) = input["patchText"].as_str()
+        && !patch.is_empty()
+    {
+        let mut proven = false;
+        for (path, change) in codex_patch(patch) {
+            let unknown = matches!(change, Change::Unknown);
+            proven |= c.push(&path, change, time, id, model.clone()) && !unknown;
+        }
+        if proven {
+            return;
+        }
+    }
     if let Some(files) = result.get("files").and_then(Value::as_array) {
         for file in files {
             let Some(path) = string(file, &["filePath", "path", "file"]) else {

@@ -861,7 +861,7 @@ fn content_text(v: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn codex_patch(patch: &str) -> Vec<(String, Change)> {
+pub(super) fn codex_patch(patch: &str) -> Vec<(String, Change)> {
     let mut results = Vec::new();
     let mut path = None;
     let mut pairs = Vec::new();
