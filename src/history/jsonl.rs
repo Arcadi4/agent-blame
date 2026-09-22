@@ -590,6 +590,17 @@ pub(super) fn load(
                                 let id = string(item, &["id", "call_id"]);
                                 let change = match string(change, &["unified_diff", "diff"]) {
                                     Some(diff) => Change::Unified(diff.into()),
+                                    // Add entries carry the created file's full
+                                    // bytes; that is exact evidence, not intent.
+                                    _ if string(change, &["type"]) == Some("add") => {
+                                        match string(change, &["content"]) {
+                                            Some(content) => Change::Snapshot {
+                                                before: vec![],
+                                                after: content.as_bytes().to_vec(),
+                                            },
+                                            None => Change::Unknown,
+                                        }
+                                    }
                                     _ => Change::Unknown,
                                 };
                                 c.push(path, change, event_time, id, c.model.clone());
