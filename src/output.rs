@@ -82,7 +82,7 @@ pub fn render(
         }
     }
     let mut last_group = None;
-    for line in lines {
+    for (index, line) in lines.iter().enumerate() {
         let key = (line.oid.clone(), line.path.clone());
         let target = &targets[&key];
         let a = results.get(&key).and_then(|m| m.get(&(line.original - 1)));
@@ -155,23 +155,92 @@ pub fn render(
                 )?;
             }
             Style::Default => {
-                let group = (
-                    line.oid.clone(),
-                    model.clone(),
-                    agent.to_owned(),
-                    session.to_owned(),
-                    time.clone(),
-                );
+                // Git commits are useful context for proven agent edits, but
+                // splitting every unattributed line by commit obscures the
+                // agent regions this view is meant to surface.
+                let group = a.map(|_| {
+                    (
+                        line.oid.clone(),
+                        model.clone(),
+                        agent.to_owned(),
+                        session.to_owned(),
+                        time.clone(),
+                    )
+                });
                 if last_group.as_ref() != Some(&group) {
                     if last_group.is_some() {
                         writeln!(out)?;
                     }
-                    let commit = &line.oid[..line.oid.len().min(12)];
-                    let identity = clean(&target.author);
-                    if color {
-                        writeln!(out, "{}  {}", commit.yellow(), identity.dimmed())?;
+                    let heading = if a.is_some() {
+                        format!(
+                            "{}  {}",
+                            &line.oid[..line.oid.len().min(12)],
+                            clean(&target.author)
+                        )
                     } else {
-                        writeln!(out, "{commit}  {identity}")?;
+                        let mut commits = Vec::new();
+                        for context in lines.iter().skip(index).take_while(|context| {
+                            let context_key = (context.oid.clone(), context.path.clone());
+                            results
+                                .get(&context_key)
+                                .and_then(|items| items.get(&(context.original - 1)))
+                                .is_none()
+                        }) {
+                            let context_key = (context.oid.clone(), context.path.clone());
+                            let context_target = &targets[&context_key];
+                            let commit = (
+                                context.oid[..context.oid.len().min(12)].to_owned(),
+                                clean(&context_target.author),
+                            );
+                            if !commits.iter().any(|(oid, _)| oid == &commit.0) {
+                                commits.push(commit);
+                            }
+                        }
+                        let shown = commits.iter().take(3).cloned().collect::<Vec<_>>();
+                        let more = commits.len().saturating_sub(shown.len());
+                        let same_author = match commits.first() {
+                            Some((_, first_author)) => {
+                                commits.iter().all(|(_, author)| author == first_author)
+                            }
+                            None => true,
+                        };
+                        let heading = if same_author {
+                            let ids = shown.iter().map(|(oid, _)| oid.clone()).collect::<Vec<_>>();
+                            let author = shown
+                                .first()
+                                .map(|(_, author)| author.as_str())
+                                .unwrap_or("");
+                            if more > 0 {
+                                format!("{}, and {more} more  {author}", ids.join(", "))
+                            } else {
+                                format!("{}  {author}", ids.join(", "))
+                            }
+                        } else {
+                            let mut groups: Vec<(Vec<String>, String)> = Vec::new();
+                            for (oid, author) in &shown {
+                                if let Some((ids, previous_author)) = groups.last_mut() {
+                                    if previous_author == author {
+                                        ids.push(oid.clone());
+                                        continue;
+                                    }
+                                }
+                                groups.push((vec![oid.clone()], author.clone()));
+                            }
+                            let mut entries = groups
+                                .iter()
+                                .map(|(ids, author)| format!("{}  {author}", ids.join(", ")))
+                                .collect::<Vec<_>>();
+                            if more > 0 {
+                                entries.push(format!("and {more} more"));
+                            }
+                            entries.join("; ")
+                        };
+                        heading
+                    };
+                    if color {
+                        writeln!(out, "{}", heading.yellow())?;
+                    } else {
+                        writeln!(out, "{heading}")?;
                     }
                     if a.is_some() {
                         let label = format!(
