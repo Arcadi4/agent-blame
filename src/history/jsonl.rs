@@ -147,6 +147,8 @@ impl<'a> Collector<'a> {
         }
     }
 
+    /// Records an edit for the blamed target. Returns whether it was kept:
+    /// callers with richer fallback evidence must not short-circuit on `false`.
     pub fn push(
         &mut self,
         path: &str,
@@ -154,26 +156,40 @@ impl<'a> Collector<'a> {
         time: Option<i64>,
         id: Option<&str>,
         model: Option<String>,
-    ) {
-        let Some(relative) = self.repo.relative_history_path(self.cwd, path) else {
-            return;
-        };
-        if relative != self.target.path && relative != self.target.parent_path {
-            return;
+    ) -> bool {
+        let exact = self
+            .repo
+            .relative_history_path(self.cwd, path)
+            .is_some_and(|r| r == self.target.path || r == self.target.parent_path);
+        if !exact {
+            // Heuristic alternates (moved checkouts, nested worktree copies)
+            // must prove bytes: unproven touches stay dropped, and fragments
+            // must at least apply to the blamed parent.
+            if matches!(change, Change::Unknown)
+                || change.apply(&self.target.before).is_none()
+                || !self
+                    .repo
+                    .relative_history_fallbacks(self.cwd, path)
+                    .into_iter()
+                    .any(|r| r == self.target.path || r == self.target.parent_path)
+            {
+                return false;
+            }
         }
         if time.zip(self.started).is_some_and(|(t, s)| t < s) {
-            return;
+            return false;
         }
         if let Some(id) = id
             && (self.inherited.contains(id) || !self.seen.insert(format!("{id}\0{path}")))
         {
-            return;
+            return false;
         }
         self.history.edits.push(Edit {
             time,
             model,
             change,
         });
+        true
     }
 
     fn set_model(&mut self, model: Option<&str>) {

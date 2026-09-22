@@ -68,6 +68,24 @@ pub fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Trailing components after the last path element equal to `base`.
+/// Used when history outlives the checkout's on-disk location.
+fn after_basename(absolute: &Path, base: Option<&OsStr>) -> Option<Vec<u8>> {
+    let base = base?;
+    let parts: Vec<_> = absolute.components().collect();
+    let last = parts
+        .iter()
+        .rposition(|c| matches!(c, Component::Normal(name) if *name == base))?;
+    if last + 1 >= parts.len() {
+        return None;
+    }
+    let mut rest = PathBuf::new();
+    for part in &parts[last + 1..] {
+        rest.push(part);
+    }
+    Some(bytes(rest.as_os_str()).to_vec())
+}
+
 pub fn command(root: &Path) -> Command {
     let mut c = Command::new("git");
     c.current_dir(root)
@@ -372,6 +390,49 @@ impl Repo {
             .map(|p| bytes(p.as_os_str()).to_vec())
     }
 
+    /// Alternate repo-relative resolutions for history recorded before the
+    /// checkout moved on disk or inside a nested worktree copy.
+    /// Callers must only use these with byte-proven changes; `Unknown`
+    /// must keep failing closed.
+    pub fn relative_history_fallbacks(&self, cwd: &Path, path: &str) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut seeds = Vec::new();
+        if let Some(primary) = self.relative_history_path(cwd, path) {
+            seeds.push(primary);
+        } else {
+            // The checkout moved; the trailing components after its basename
+            // still identify the file. Byte proof must confirm the guess.
+            let raw = Path::new(path.strip_prefix("file://").unwrap_or(path));
+            let absolute = normalize(&if raw.is_absolute() {
+                raw.to_path_buf()
+            } else {
+                cwd.join(raw)
+            });
+            if let Some(rest) = after_basename(&absolute, self.root.file_name()) {
+                out.push(rest.clone());
+                seeds.push(rest);
+            }
+        }
+        for relative in seeds {
+            // Nested worktree copies (`.worktrees/<name>/...`) commit without
+            // the copy prefix. Suffixes after it are the committed layout.
+            let mut parts = relative.split(|b| *b == b'/');
+            if parts.next() == Some(b".worktrees".as_slice()) {
+                let mut rest: Vec<&[u8]> = parts.collect();
+                while rest.len() > 1 {
+                    rest.remove(0);
+                    let mut joined = rest[0].to_vec();
+                    for part in &rest[1..] {
+                        joined.push(b'/');
+                        joined.extend_from_slice(part);
+                    }
+                    out.push(joined);
+                }
+            }
+        }
+        out
+    }
+
     pub fn matches_project(&self, cwd: &Path) -> bool {
         let cwd = normalize(cwd);
         self.worktrees
@@ -457,4 +518,21 @@ pub fn parse_blame(data: &[u8]) -> Result<Vec<BlamedLine>> {
         });
     }
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn basename_suffix_matches_moved_checkout() {
+        let abs = Path::new("/moved-checkout/repo/a.txt");
+        assert_eq!(
+            after_basename(abs, Some(OsStr::new("repo"))).as_deref(),
+            Some(b"a.txt".as_slice())
+        );
+        assert!(after_basename(abs, Some(OsStr::new("other"))).is_none());
+        assert!(
+            after_basename(Path::new("/moved-checkout/repo"), Some(OsStr::new("repo"))).is_none()
+        );
+    }
 }
