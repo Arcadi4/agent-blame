@@ -358,6 +358,105 @@ fn opencode_v1_and_v2_applied_tool_records() {
 }
 
 #[test]
+fn confirmed_creation_can_precede_an_unrelated_parent_commit() {
+    for version in [1, 2] {
+        let f = Fixture::new();
+        fs::write(f.root.join("created.txt"), AFTER).unwrap();
+        // Like a batch of atomic commits: the file was created before the
+        // preceding commit, which did not contain it, at the same Git second.
+        f.commit("2020-01-01T00:10:00Z");
+        opencode_database(&f, version);
+        let db = rusqlite::Connection::open(f.stores.join("xdg/opencode/opencode.db")).unwrap();
+        for exists in [false, true] {
+            let tool = json!({"type":"tool","id":"create","tool":"write","name":"write","state":{"status":"completed","input":{"filePath":"created.txt","content":AFTER},"time":{"start":1577836920000i64},"metadata":{"filepath":"created.txt","exists":exists}}});
+            if version == 2 {
+                let message = json!({"model":{"id":"fixture-model"},"content":[tool]});
+                db.execute("UPDATE session_message SET data=?1", [message.to_string()])
+                    .unwrap();
+            } else {
+                db.execute("UPDATE part SET data=?1", [tool.to_string()])
+                    .unwrap();
+            }
+            let out = f.text(&["--agent=opencode", "--style=porcelain", "created.txt"]);
+            let agent = if exists { "unknown" } else { "opencode" };
+            assert_eq!(
+                out.matches(&format!("agent \"{agent}\"\n")).count(),
+                3,
+                "v{version}, exists={exists}: {out}"
+            );
+        }
+    }
+}
+
+#[test]
+fn edit_window_follows_the_preimage_file_across_unrelated_commits_and_renames() {
+    for renamed in [false, true] {
+        let f = Fixture::new();
+        fs::write(f.root.join("a.txt"), BEFORE).unwrap();
+        f.commit("2020-01-01T00:11:00Z");
+        fs::write(f.root.join("unrelated.txt"), "other change\n").unwrap();
+        f.commit("2020-01-01T00:15:00Z");
+        fs::write(f.root.join("a.txt"), AFTER).unwrap();
+        let path = if renamed {
+            fs::rename(f.root.join("a.txt"), f.root.join("renamed.txt")).unwrap();
+            "renamed.txt"
+        } else {
+            "a.txt"
+        };
+        f.commit("2020-01-01T00:20:00Z");
+        let mut rows = f.native("codex");
+        rows[0]["payload"]["timestamp"] = json!("2020-01-01T00:11:30Z");
+        rows[1]["timestamp"] = json!("2020-01-01T00:11:30Z");
+        rows[2]["timestamp"] = json!("2020-01-01T00:12:00Z");
+        rows[3]["timestamp"] = json!("2020-01-01T00:13:00Z");
+        f.install("codex", &rows);
+        let out = f.text(&["--agent=codex", "--style=porcelain", "-L2,2", path]);
+        assert!(out.contains("agent \"codex\""), "renamed={renamed}: {out}");
+
+        // The same bytes were also edited before the intervening restore.
+        // That older evidence must not explain the new occurrence.
+        f.install("codex", &f.native("codex"));
+        let out = f.text(&["--agent=codex", "--style=porcelain", "-L2,2", path]);
+        assert!(out.contains("agent \"unknown\""), "stale edit: {out}");
+    }
+}
+
+#[test]
+fn recreation_does_not_reuse_evidence_from_before_a_delete_or_emptying() {
+    for deleted in [false, true] {
+        let f = Fixture::new();
+        if deleted {
+            fs::remove_file(f.root.join("a.txt")).unwrap();
+        } else {
+            fs::write(f.root.join("a.txt"), "").unwrap();
+        }
+        f.commit("2020-01-01T00:11:00Z");
+        fs::write(f.root.join("unrelated.txt"), "other change\n").unwrap();
+        f.commit("2020-01-01T00:15:00Z");
+        fs::write(f.root.join("a.txt"), AFTER).unwrap();
+        f.commit("2020-01-01T00:20:00Z");
+        let mut rows = f.native("codex");
+        rows[2]["payload"]["item"]["changes"]["a.txt"] = json!({"type":"add","content":AFTER});
+        f.install("codex", &rows);
+        let out = f.text(&["--agent=codex", "--style=porcelain", "a.txt"]);
+        assert!(
+            !out.contains("agent \"codex\""),
+            "stale creation, deleted={deleted}: {out}"
+        );
+
+        rows[2]["timestamp"] = json!("2020-01-01T00:12:00Z");
+        rows[3]["timestamp"] = json!("2020-01-01T00:13:00Z");
+        f.install("codex", &rows);
+        let out = f.text(&["--agent=codex", "--style=porcelain", "a.txt"]);
+        assert_eq!(
+            out.matches("agent \"codex\"\n").count(),
+            3,
+            "fresh creation: {out}"
+        );
+    }
+}
+
+#[test]
 fn dsh_compressed_generations_and_seed_prefix() {
     let f = Fixture::new();
     let mut rows = f.native("dsh");

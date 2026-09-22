@@ -306,8 +306,8 @@ impl<'a> Search<'a> {
             if !forward
                 && candidate
                     .updated
-                    .zip(target.parent_time)
-                    .is_some_and(|(end, parent)| end <= parent)
+                    .zip(target.preimage_time)
+                    .is_some_and(|(end, preimage)| end <= preimage)
             {
                 continue;
             }

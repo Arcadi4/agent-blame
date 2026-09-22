@@ -284,8 +284,7 @@ pub fn attribute(
             if forward {
                 t > target.commit_time && t <= now
             } else {
-                t <= target.commit_time
-                    && (target.before.is_empty() || target.parent_time.is_none_or(|p| t > p))
+                t <= target.commit_time && target.preimage_time.is_none_or(|p| t > p)
             }
         }
         None => {
@@ -293,10 +292,9 @@ pub fn attribute(
                 started.is_some_and(|t| t > target.commit_time && t <= now)
             } else {
                 updated.is_some_and(|t| t <= target.commit_time)
-                    && (target.before.is_empty()
-                        || target
-                            .parent_time
-                            .is_none_or(|p| started.is_some_and(|t| t > p)))
+                    && target
+                        .preimage_time
+                        .is_none_or(|p| started.is_some_and(|t| t > p))
             }
         }
     };
@@ -433,7 +431,7 @@ mod tests {
             author_time: 0,
             author_tz: "+0000".into(),
             commit_time: 100,
-            parent_time: None,
+            preimage_time: None,
             merge: false,
         }
     }
@@ -603,7 +601,7 @@ mod tests {
         assert_eq!(found[&0].models, vec!["editing-model"]);
         assert_eq!(found[&0].time, Some(50));
         let mut t = t;
-        t.parent_time = Some(60);
+        t.preimage_time = Some(60);
         assert!(
             attribute(&t, &[0], &session, &history, false)
                 .matched

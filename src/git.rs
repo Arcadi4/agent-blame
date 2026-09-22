@@ -34,7 +34,7 @@ pub struct Target {
     pub author_time: i64,
     pub author_tz: String,
     pub commit_time: i64,
-    pub parent_time: Option<i64>,
+    pub preimage_time: Option<i64>,
     pub merge: bool,
 }
 
@@ -285,27 +285,6 @@ impl Repo {
             .collect();
         let after = self.blob(oid, path)?;
         let mut parent_path = path.to_vec();
-        let parent_time = if parents.len() == 1 {
-            let output = checked(
-                command(&self.root)
-                    .args([
-                        "show",
-                        "-s",
-                        "--format=%ct",
-                        &String::from_utf8_lossy(parents[0]),
-                        "--",
-                    ])
-                    .output()?,
-            )?;
-            Some(
-                String::from_utf8_lossy(output.trim_ascii())
-                    .parse::<i64>()?
-                    .saturating_mul(1000)
-                    .saturating_add(999),
-            )
-        } else {
-            None
-        };
         let before = if parents.len() == 1 {
             let parent = String::from_utf8_lossy(parents[0]);
             let changes = checked(
@@ -344,6 +323,35 @@ impl Repo {
         } else {
             vec![]
         };
+        // Unrelated commits do not change the preimage. Bound stale evidence
+        // by the last change to this file, using Git's resolved pre-rename path.
+        // A prior deletion/emptying is also a boundary; only a new path has none.
+        let preimage_time = if parents.len() == 1 {
+            let output = checked(
+                command(&self.root)
+                    .args([
+                        "log",
+                        "-1",
+                        "--format=%ct",
+                        &String::from_utf8_lossy(parents[0]),
+                        "--",
+                    ])
+                    .arg(os(&parent_path))
+                    .output()?,
+            )?;
+            if output.trim_ascii().is_empty() {
+                None
+            } else {
+                Some(
+                    String::from_utf8_lossy(output.trim_ascii())
+                        .parse::<i64>()?
+                        .saturating_mul(1000)
+                        .saturating_add(999),
+                )
+            }
+        } else {
+            None
+        };
         Ok(Target {
             oid: oid.to_owned(),
             path: path.to_vec(),
@@ -361,7 +369,7 @@ impl Repo {
             commit_time: String::from_utf8_lossy(fields[5])
                 .parse::<i64>()?
                 .saturating_mul(1000),
-            parent_time,
+            preimage_time,
             merge: parents.len() > 1,
         })
     }
