@@ -167,24 +167,24 @@ pub fn render(
                         writeln!(out)?;
                     }
                     let commit = &line.oid[..line.oid.len().min(12)];
-                    let identity = format!("{} <{}>", clean(&target.author), clean(&target.email));
+                    let identity = clean(&target.author);
                     if color {
                         writeln!(out, "{}  {}", commit.yellow(), identity.dimmed())?;
                     } else {
                         writeln!(out, "{commit}  {identity}")?;
                     }
-                    let label = format!(
-                        "{agent} · {}  {}  session {}",
-                        clean(&model),
-                        time,
-                        clean(session)
-                    );
-                    if color && a.is_some() {
-                        writeln!(out, "{}", label.cyan())?;
-                    } else if color {
-                        writeln!(out, "{}", label.dimmed())?;
-                    } else {
-                        writeln!(out, "{label}")?;
+                    if a.is_some() {
+                        let label = format!(
+                            "{agent} ({})  {}  [{}]",
+                            clean(&model),
+                            time,
+                            clean(session)
+                        );
+                        if color {
+                            writeln!(out, "{}", label.cyan())?;
+                        } else {
+                            writeln!(out, "{label}")?;
+                        }
                     }
                     last_group = Some(group);
                 }
