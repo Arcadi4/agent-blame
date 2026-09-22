@@ -139,20 +139,36 @@ pub fn render(
                         .ok()
                     })
                     .unwrap_or_else(|| "unknown".into());
-                writeln!(
-                    out,
-                    "{} ({} {} {} {:>width$}) [{} {} {} {}] {}",
-                    &line.oid[..line.oid.len().min(12)],
-                    clean(&target.author),
-                    date,
-                    tz,
-                    line.final_line,
-                    clean(&model),
-                    agent,
-                    time,
-                    clean(session),
-                    clean(&String::from_utf8_lossy(&line.source))
-                )?;
+                if a.is_some() {
+                    writeln!(
+                        out,
+                        "{} ({} {} {} {:>width$}) [{} {} {} {}] {}",
+                        &line.oid[..line.oid.len().min(12)],
+                        clean(&target.author),
+                        date,
+                        tz,
+                        line.final_line,
+                        clean(&model),
+                        agent,
+                        time,
+                        clean(session),
+                        clean(&String::from_utf8_lossy(&line.source))
+                    )?;
+                } else {
+                    const UNKNOWN_PADDING: &str = "                                 ";
+                    const _: () =
+                        assert!(UNKNOWN_PADDING.len() == "[unknown unknown unknown unknown]".len());
+                    writeln!(
+                        out,
+                        "{} ({} {} {} {:>width$}) {UNKNOWN_PADDING} {}",
+                        &line.oid[..line.oid.len().min(12)],
+                        clean(&target.author),
+                        date,
+                        tz,
+                        line.final_line,
+                        clean(&String::from_utf8_lossy(&line.source))
+                    )?;
+                }
             }
             Style::Default => {
                 // Git commits are useful context for proven agent edits, but
