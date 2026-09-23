@@ -1,5 +1,6 @@
 use super::{
     Candidate, Source, Stats, database,
+    formatter::{CommandRecord, Formatter},
     jsonl::{Collector, codex_patch, stamp, string},
 };
 use crate::{
@@ -113,6 +114,7 @@ pub(super) fn load(
         return Ok(History::default());
     };
     let mut c = Collector::new(repo, candidate, target);
+    let mut formatter = Formatter::new(target);
     c.history.updated = candidate.updated;
     match &candidate.source {
         Source::OpenCode { db, version } => {
@@ -139,7 +141,14 @@ pub(super) fn load(
                     }
                     let native_id =
                         format!("{mid}:{}", string(&tool, &["id"]).unwrap_or("unknown"));
-                    parse_tool(&mut c, &tool, model, Some(when), Some(&native_id));
+                    process_tool(
+                        &mut c,
+                        &mut formatter,
+                        &tool,
+                        model,
+                        Some(when),
+                        Some(&native_id),
+                    );
                 }
             } else {
                 let mut query=db.prepare("SELECT p.id,p.time_created,json_extract(m.data,'$.modelID'),p.data FROM part p LEFT JOIN message m ON m.id=p.message_id WHERE p.session_id=?1 AND json_extract(p.data,'$.type')='tool' ORDER BY p.time_created,p.id")?;
@@ -159,7 +168,7 @@ pub(super) fn load(
                     if let Some(m) = &model {
                         c.history.models.insert(m.clone());
                     }
-                    parse_tool(&mut c, &tool, model, Some(when), Some(&id));
+                    process_tool(&mut c, &mut formatter, &tool, model, Some(when), Some(&id));
                 }
             }
         }
@@ -196,8 +205,9 @@ pub(super) fn load(
                 }
                 parts.sort_by_key(|v| stamp(&v["state"]["time"]["start"]));
                 for part in parts {
-                    parse_tool(
+                    process_tool(
                         &mut c,
+                        &mut formatter,
                         &part,
                         model.clone(),
                         stamp(&message["time"]["created"]),
@@ -210,6 +220,54 @@ pub(super) fn load(
     }
     c.history.edits.sort_by_key(|e| e.time);
     Ok(c.history)
+}
+
+fn process_tool(
+    c: &mut Collector<'_>,
+    formatter: &mut Formatter,
+    tool: &Value,
+    model: Option<String>,
+    time: Option<i64>,
+    id: Option<&str>,
+) {
+    let state = &tool["state"];
+    if string(tool, &["name", "tool"]) == Some("bash") {
+        // Applied per-file metadata, when present, is stronger than a later
+        // observation of the worktree. Use it first and avoid double counting.
+        if state["metadata"]["exit"].as_i64() == Some(0) {
+            let previous = c.history.edits.len();
+            parse_tool(c, tool, model.clone(), time, id);
+            if c.history.edits.len() > previous {
+                for edit in &c.history.edits[previous..] {
+                    formatter.edit(&edit.change);
+                }
+                return;
+            }
+        }
+        if let Some(command) = state["input"]["command"].as_str() {
+            let output = state["output"].as_str().unwrap_or("");
+            formatter.command(
+                c,
+                CommandRecord {
+                    command,
+                    output,
+                    completed: state["status"] == "completed"
+                        && state["metadata"]["exit"].as_i64() == Some(0)
+                        && state["metadata"]["truncated"].as_bool() != Some(true),
+                    cwd: string(&state["input"], &["workdir", "cwd"]),
+                    id,
+                    time,
+                    model,
+                },
+            );
+        }
+    } else {
+        let previous = c.history.edits.len();
+        parse_tool(c, tool, model, time, id);
+        for edit in &c.history.edits[previous..] {
+            formatter.edit(&edit.change);
+        }
+    }
 }
 
 fn parse_tool(
@@ -226,7 +284,10 @@ fn parse_tool(
     let Some(name) = string(tool, &["name", "tool"]) else {
         return;
     };
-    if !matches!(name, "edit" | "write" | "apply_patch" | "multiedit") {
+    if !matches!(
+        name,
+        "edit" | "write" | "apply_patch" | "multiedit" | "bash"
+    ) {
         return;
     }
     let time = stamp(&tool["time"]["created"])

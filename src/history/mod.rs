@@ -1,3 +1,4 @@
+mod formatter;
 mod jsonl;
 mod opencode;
 

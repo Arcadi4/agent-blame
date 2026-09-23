@@ -1,4 +1,7 @@
-use super::{Candidate, Source, Stats};
+use super::{
+    Candidate, Source, Stats,
+    formatter::{CommandRecord, Formatter},
+};
 use crate::{
     cli::Agent,
     evidence::{Change, Edit, History},
@@ -211,6 +214,7 @@ impl<'a> Collector<'a> {
                 | "NotebookEdit"
                 | "str_replace_editor"
                 | "ast_edit"
+                | "bash"
         ) {
             self.calls.insert(
                 id.to_owned(),
@@ -514,6 +518,7 @@ pub(super) fn load(
     let mut buffer = Vec::new();
     let mut branches = HashMap::<String, Option<String>>::new();
     let mut modern_codex = Vec::new();
+    let mut formatter = Formatter::new(target);
     let mut seed_length = 0;
     loop {
         buffer.clear();
@@ -560,6 +565,7 @@ pub(super) fn load(
                     "FileChange",
                     "file_change",
                     "patch_apply_end",
+                    "CommandExecution",
                     "function_call",
                     "custom_tool_call",
                 ]
@@ -603,8 +609,32 @@ pub(super) fn load(
                                     }
                                     _ => Change::Unknown,
                                 };
-                                c.push(path, change, event_time, id, c.model.clone());
+                                if c.push(path, change.clone(), event_time, id, c.model.clone()) {
+                                    formatter.edit(&change);
+                                }
                             }
+                        }
+                    }
+                    if item["type"] == "CommandExecution" {
+                        let command = item["command"]
+                            .as_array()
+                            .and_then(|parts| parts.last())
+                            .and_then(Value::as_str);
+                        if let Some(command) = command {
+                            let model = c.model.clone();
+                            formatter.command(
+                                &mut c,
+                                CommandRecord {
+                                    command,
+                                    output: item["stdout"].as_str().unwrap_or(""),
+                                    completed: item["status"] == "completed"
+                                        && item["exit_code"].as_i64() == Some(0),
+                                    cwd: item["cwd"].as_str(),
+                                    id: item["id"].as_str(),
+                                    time: event_time,
+                                    model,
+                                },
+                            );
                         }
                     }
                     continue;
@@ -726,6 +756,23 @@ pub(super) fn load(
                     let repaired =
                         content_text(&m["content"]).contains("an automatic syntax repair (");
                     let previous = c.history.edits.len();
+                    if call.name == "bash" {
+                        let args = &call.args;
+                        if let Some(command) = args["command"].as_str() {
+                            formatter.command(
+                                &mut c,
+                                CommandRecord {
+                                    command,
+                                    output: &content_text(&m["content"]),
+                                    completed: true,
+                                    cwd: args["cwd"].as_str(),
+                                    id: Some(id),
+                                    time: call.time.or(when),
+                                    model: call.model.clone(),
+                                },
+                            );
+                        }
+                    }
                     c.result(
                         &call.name,
                         &call.args,
@@ -734,6 +781,9 @@ pub(super) fn load(
                         Some(id),
                         call.model,
                     );
+                    for edit in &c.history.edits[previous..] {
+                        formatter.edit(&edit.change);
+                    }
                     if repaired {
                         for edit in &mut c.history.edits[previous..] {
                             edit.change = Change::Unknown;
