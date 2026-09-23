@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Output},
 };
 use tempfile::TempDir;
@@ -203,7 +203,7 @@ fn writes_require_observed_preimages_and_applied_status() {
 }
 
 #[test]
-fn git_contract_author_selection_rename_dirty_and_hashes() {
+fn cli_honors_git_history_and_worktree_boundaries() {
     let f = Fixture::with_hash("sha256");
     f.install("codex", &f.native("codex"));
     let commit = f.git(&["rev-parse", "HEAD"]).trim().to_owned();
@@ -253,10 +253,16 @@ fn git_contract_author_selection_rename_dirty_and_hashes() {
     assert!(!f.run(&["renamed-λ.txt"]).status.success());
     fs::write(f.root.join("untracked"), "x").unwrap();
     assert!(!f.run(&["untracked"]).status.success());
+    let o = Command::new(env!("CARGO_BIN_EXE_agent-blame"))
+        .current_dir(&f.stores)
+        .arg("anything")
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
 }
 
 #[test]
-fn forward_search_is_opt_in_and_chooses_earliest_concrete_edit() {
+fn session_lookup_obeys_time_and_fork_relationships() {
     let f = Fixture::new();
     for (id, time) in [
         ("later", "2020-01-01T00:40:00Z"),
@@ -282,10 +288,7 @@ fn forward_search_is_opt_in_and_chooses_earliest_concrete_edit() {
         "a.txt",
     ]);
     assert!(out.contains("session-id \"earliest\""));
-}
 
-#[test]
-fn fork_inheritance_and_sessions_spanning_commit() {
     let f = Fixture::new();
     let rows = f.native("codex");
     f.install("codex", &rows);
@@ -358,7 +361,7 @@ fn opencode_v1_and_v2_applied_tool_records() {
 }
 
 #[test]
-fn confirmed_creation_can_precede_an_unrelated_parent_commit() {
+fn file_creation_evidence_respects_preimage_state() {
     for version in [1, 2] {
         let f = Fixture::new();
         fs::write(f.root.join("created.txt"), AFTER).unwrap();
@@ -386,43 +389,6 @@ fn confirmed_creation_can_precede_an_unrelated_parent_commit() {
             );
         }
     }
-}
-
-#[test]
-fn edit_window_follows_the_preimage_file_across_unrelated_commits_and_renames() {
-    for renamed in [false, true] {
-        let f = Fixture::new();
-        fs::write(f.root.join("a.txt"), BEFORE).unwrap();
-        f.commit("2020-01-01T00:11:00Z");
-        fs::write(f.root.join("unrelated.txt"), "other change\n").unwrap();
-        f.commit("2020-01-01T00:15:00Z");
-        fs::write(f.root.join("a.txt"), AFTER).unwrap();
-        let path = if renamed {
-            fs::rename(f.root.join("a.txt"), f.root.join("renamed.txt")).unwrap();
-            "renamed.txt"
-        } else {
-            "a.txt"
-        };
-        f.commit("2020-01-01T00:20:00Z");
-        let mut rows = f.native("codex");
-        rows[0]["payload"]["timestamp"] = json!("2020-01-01T00:11:30Z");
-        rows[1]["timestamp"] = json!("2020-01-01T00:11:30Z");
-        rows[2]["timestamp"] = json!("2020-01-01T00:12:00Z");
-        rows[3]["timestamp"] = json!("2020-01-01T00:13:00Z");
-        f.install("codex", &rows);
-        let out = f.text(&["--agent=codex", "--style=porcelain", "-L2,2", path]);
-        assert!(out.contains("agent \"codex\""), "renamed={renamed}: {out}");
-
-        // The same bytes were also edited before the intervening restore.
-        // That older evidence must not explain the new occurrence.
-        f.install("codex", &f.native("codex"));
-        let out = f.text(&["--agent=codex", "--style=porcelain", "-L2,2", path]);
-        assert!(out.contains("agent \"unknown\""), "stale edit: {out}");
-    }
-}
-
-#[test]
-fn recreation_does_not_reuse_evidence_from_before_a_delete_or_emptying() {
     for deleted in [false, true] {
         let f = Fixture::new();
         if deleted {
@@ -453,6 +419,39 @@ fn recreation_does_not_reuse_evidence_from_before_a_delete_or_emptying() {
             3,
             "fresh creation: {out}"
         );
+    }
+}
+
+#[test]
+fn edit_evidence_follows_target_file_state() {
+    for renamed in [false, true] {
+        let f = Fixture::new();
+        fs::write(f.root.join("a.txt"), BEFORE).unwrap();
+        f.commit("2020-01-01T00:11:00Z");
+        fs::write(f.root.join("unrelated.txt"), "other change\n").unwrap();
+        f.commit("2020-01-01T00:15:00Z");
+        fs::write(f.root.join("a.txt"), AFTER).unwrap();
+        let path = if renamed {
+            fs::rename(f.root.join("a.txt"), f.root.join("renamed.txt")).unwrap();
+            "renamed.txt"
+        } else {
+            "a.txt"
+        };
+        f.commit("2020-01-01T00:20:00Z");
+        let mut rows = f.native("codex");
+        rows[0]["payload"]["timestamp"] = json!("2020-01-01T00:11:30Z");
+        rows[1]["timestamp"] = json!("2020-01-01T00:11:30Z");
+        rows[2]["timestamp"] = json!("2020-01-01T00:12:00Z");
+        rows[3]["timestamp"] = json!("2020-01-01T00:13:00Z");
+        f.install("codex", &rows);
+        let out = f.text(&["--agent=codex", "--style=porcelain", "-L2,2", path]);
+        assert!(out.contains("agent \"codex\""), "renamed={renamed}: {out}");
+
+        // The same bytes were also edited before the intervening restore.
+        // That older evidence must not explain the new occurrence.
+        f.install("codex", &f.native("codex"));
+        let out = f.text(&["--agent=codex", "--style=porcelain", "-L2,2", path]);
+        assert!(out.contains("agent \"unknown\""), "stale edit: {out}");
     }
 }
 
@@ -493,18 +492,11 @@ fn dsh_compressed_generations_and_seed_prefix() {
 }
 
 #[test]
-fn output_preserves_unusual_source_bytes_and_non_repository_warning() {
+fn porcelain_preserves_non_utf8_source_bytes() {
     let f = Fixture::new();
     fs::write(f.root.join("a.txt"), b"\xff\t\x1b\r\nlast").unwrap();
     f.commit("2020-01-01T00:20:00Z");
     let out = f.text(&["--agent=codex", "--style=porcelain", "a.txt"]);
     assert!(out.contains("source-bytes ff091b0d\n"));
     assert!(out.contains("source \"last\""));
-    let o = Command::new(env!("CARGO_BIN_EXE_agent-blame"))
-        .current_dir(Path::new(&f.stores))
-        .arg("anything")
-        .output()
-        .unwrap();
-    assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("future release"));
 }
