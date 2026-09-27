@@ -423,7 +423,23 @@ fn numbered_patch(diff: &str) -> Option<String> {
         Some(())
     };
     for raw in diff.lines() {
-        let sign = raw.as_bytes().first().copied()?;
+        let sign = match raw.as_bytes().first().copied() {
+            Some(sign) => sign,
+            // A blank line is a block separator between elided jumps, never
+            // content: an empty content line keeps its number marker. Flush
+            // like any other unnumbered line instead of aborting the parse.
+            None => {
+                flush(
+                    &mut result,
+                    &mut body,
+                    &mut old_start,
+                    &mut new_start,
+                    &mut old_count,
+                    &mut new_count,
+                )?;
+                continue;
+            }
+        };
         if !matches!(sign, b' ' | b'+' | b'-')
             || !raw[1..]
                 .trim_start()
