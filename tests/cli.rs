@@ -521,6 +521,32 @@ fn edit_evidence_follows_target_file_state() {
 }
 
 #[test]
+fn unobserved_write_preimages_prove_creations() {
+    for created in [true, false] {
+        let f = Fixture::new();
+        if !created {
+            fs::write(f.root.join("made.txt"), "seed\n").unwrap();
+            f.commit("2020-01-01T00:05:00Z");
+        }
+        fs::write(f.root.join("made.txt"), AFTER).unwrap();
+        f.commit("2020-01-01T00:10:00Z");
+        let rows = vec![
+            json!({"type":"session","version":3,"id":"native-omp","cwd":f.root,"timestamp":"2020-01-01T00:00:00Z"}),
+            json!({"type":"message","id":"request","parentId":"model","timestamp":"2020-01-01T00:02:00Z","message":{"role":"assistant","model":"fixture-model","content":[{"type":"toolCall","id":"call","name":"write","arguments":{"path":"made.txt","content":AFTER}}]}}),
+            json!({"type":"message","id":"result","parentId":"request","timestamp":"2020-01-01T00:03:00Z","message":{"role":"toolResult","toolCallId":"call","isError":false,"details":{"resolvedPath":f.root.join("made.txt")}}}),
+        ];
+        f.install("omp", &rows);
+        let out = f.text(&["--agent=omp", "--style=porcelain", "made.txt"]);
+        let agent = if created { "omp" } else { "unknown" };
+        assert_eq!(
+            out.matches(&format!("agent \"{agent}\"\n")).count(),
+            3,
+            "created={created}: {out}"
+        );
+    }
+}
+
+#[test]
 fn dsh_compressed_generations_and_seed_prefix() {
     let f = Fixture::new();
     let mut rows = f.native("dsh");
