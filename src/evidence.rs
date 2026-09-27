@@ -384,10 +384,13 @@ pub fn attribute(
             }
             continue;
         };
-        for hunk in hunks {
+        // Phase 1: try every hunk of this edit first. All hunks share the
+        // edit's coordinate frame, so a length-changing hunk must not shadow
+        // the same edit's own later regions.
+        for hunk in &hunks {
             // Compare the actual changed block, including both coordinates and bytes.
             // Context/touched ranges and a matching added string alone are not evidence.
-            let matches = committed.contains(&hunk);
+            let matches = committed.contains(hunk);
             for &line in requested {
                 if result.matched.contains_key(&line) || result.blocked.contains_key(&line) {
                     continue;
@@ -407,8 +410,24 @@ pub fn attribute(
                     } else if !forward {
                         result.blocked.insert(line, rank);
                     }
-                } else if !forward && hunk.old.len() != hunk.new.len() && line >= hunk.new_start {
-                    result.blocked.insert(line, rank);
+                }
+            }
+        }
+        // Phase 2: a length-changing region shifts coordinates below it, so
+        // earlier edits cannot claim lower lines through coincidental
+        // positions. Lines this edit matched are already anchored.
+        if !forward {
+            for hunk in &hunks {
+                if hunk.old.len() == hunk.new.len() {
+                    continue;
+                }
+                for &line in requested {
+                    if result.matched.contains_key(&line) || result.blocked.contains_key(&line) {
+                        continue;
+                    }
+                    if line >= hunk.new_start {
+                        result.blocked.insert(line, rank);
+                    }
                 }
             }
         }
