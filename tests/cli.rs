@@ -262,6 +262,32 @@ fn cli_honors_git_history_and_worktree_boundaries() {
 }
 
 #[test]
+fn explicit_revision_blames_files_removed_from_the_worktree() {
+    let f = Fixture::new();
+    f.install("codex", &f.native("codex"));
+    let blamed = f.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    f.git(&["rm", "-q", "a.txt"]);
+    f.commit("2020-01-01T00:20:00Z");
+    // Without a revision the target must still be tracked in the worktree.
+    assert!(!f.run(&["a.txt"]).status.success());
+    let out = f.text(&[
+        "--agent=codex",
+        "--style=porcelain",
+        "--everyone",
+        &blamed,
+        "--",
+        "a.txt",
+    ]);
+    assert!(out.contains("agent \"codex\""));
+    // The file must exist at the blamed revision itself.
+    assert!(
+        !f.run(&["--everyone", "HEAD", "--", "a.txt"])
+            .status
+            .success()
+    );
+}
+
+#[test]
 fn session_lookup_obeys_time_and_fork_relationships() {
     let f = Fixture::new();
     for (id, time) in [
