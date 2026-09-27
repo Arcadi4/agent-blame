@@ -51,6 +51,19 @@ pub fn lines(data: &[u8]) -> Vec<&[u8]> {
     data.lines_with_terminator().collect()
 }
 
+/// Byte proof of a claimed changed region at an exact position: the recorded
+/// old side must sit in the commit's parent and the recorded new side in the
+/// commit's result. Git's minimal edit script may decompose one change into
+/// different ops than the record, so op equality is not the authority.
+fn bytes_at(lines: &[&[u8]], start: usize, want: &[Vec<u8>]) -> bool {
+    let Some(end) = start.checked_add(want.len()) else {
+        return false;
+    };
+    lines
+        .get(start..end)
+        .is_some_and(|got| got.iter().zip(want).all(|(a, b)| *a == b.as_slice()))
+}
+
 pub fn diff(before: &[u8], after: &[u8]) -> Vec<Hunk> {
     let old = lines(before);
     let new = lines(after);
@@ -300,6 +313,8 @@ pub fn attribute(
     };
     let edits: Vec<_> = history.edits.iter().filter(eligible).collect();
     let committed = diff(&target.before, &target.after);
+    let before_lines = lines(&target.before);
+    let after_lines = lines(&target.after);
     let changed: BTreeSet<_> = committed
         .iter()
         .flat_map(|h| h.new_start..h.new_start + h.new.len())
@@ -388,9 +403,12 @@ pub fn attribute(
         // edit's coordinate frame, so a length-changing hunk must not shadow
         // the same edit's own later regions.
         for hunk in &hunks {
-            // Compare the actual changed block, including both coordinates and bytes.
-            // Context/touched ranges and a matching added string alone are not evidence.
-            let matches = committed.contains(hunk);
+            // Compare the actual changed block, including both coordinates and
+            // bytes. Unchanged context and a matching added string alone are
+            // not evidence; equal bytes at both exact positions are.
+            let matches = hunk.old != hunk.new
+                && bytes_at(&before_lines, hunk.old_start, &hunk.old)
+                && bytes_at(&after_lines, hunk.new_start, &hunk.new);
             for &line in requested {
                 if result.matched.contains_key(&line) || result.blocked.contains_key(&line) {
                     continue;
