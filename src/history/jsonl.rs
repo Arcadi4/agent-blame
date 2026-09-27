@@ -368,6 +368,7 @@ impl<'a> Collector<'a> {
                 _ if self.target.before.is_empty()
                     && result["existed"].as_bool() != Some(true)
                     && result["exists"].as_bool() != Some(true)
+                    && result["metadata"]["exists"].as_bool() != Some(true)
                     && result["type"] != "update" =>
                 {
                     args["content"]
