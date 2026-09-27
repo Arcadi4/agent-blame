@@ -10,6 +10,7 @@ pub struct Repo {
     pub root: PathBuf,
     pub file: PathBuf,
     revision: OsString,
+    explicit_revision: bool,
     pub worktrees: Vec<PathBuf>,
 }
 
@@ -137,7 +138,8 @@ impl Repo {
             )
         })?;
         ensure!(!file.as_os_str().is_empty(), "target must be a file");
-        let mut rev = if operands.len() == 2 {
+        let explicit_revision = operands.len() == 2;
+        let mut rev = if explicit_revision {
             operands[0].clone()
         } else {
             OsString::from("HEAD")
@@ -158,6 +160,7 @@ impl Repo {
             root: root.clone(),
             file,
             revision,
+            explicit_revision,
             worktrees: vec![root],
         };
         if let Ok(out) = command(&repo.root)
@@ -177,6 +180,28 @@ impl Repo {
     }
 
     pub fn ensure_clean(&self) -> Result<()> {
+        if self.explicit_revision {
+            // With an explicit revision the analysis reads committed blobs at
+            // that revision; the worktree may be dirty and the file may have
+            // been deleted or renamed since. Validate the path at the revision.
+            let mode = checked(
+                command(&self.root)
+                    .arg("ls-tree")
+                    .arg(&self.revision)
+                    .arg("--")
+                    .arg(&self.file)
+                    .output()?,
+            )?;
+            ensure!(
+                !mode.is_empty(),
+                "target file does not exist at the requested revision"
+            );
+            ensure!(
+                mode.starts_with(b"100644 ") || mode.starts_with(b"100755 "),
+                "only regular tracked files are supported"
+            );
+            return Ok(());
+        }
         let tracked = command(&self.root)
             .args(["ls-files", "--error-unmatch", "--"])
             .arg(&self.file)
