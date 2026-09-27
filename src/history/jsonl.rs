@@ -361,6 +361,24 @@ impl<'a> Collector<'a> {
                         })
                         .unwrap_or(Change::Unknown)
                 }
+                // A write without observed preimage bytes can only prove a
+                // creation; claim it where the commit's parent is genuinely
+                // empty and no result observation reports an overwrite.
+                // Byte proof decides the rest.
+                _ if self.target.before.is_empty()
+                    && result["existed"].as_bool() != Some(true)
+                    && result["exists"].as_bool() != Some(true)
+                    && result["type"] != "update" =>
+                {
+                    args["content"]
+                        .as_str()
+                        .or(after)
+                        .map(|after| Change::Snapshot {
+                            before: vec![],
+                            after: after.as_bytes().to_vec(),
+                        })
+                        .unwrap_or(Change::Unknown)
+                }
                 _ => Change::Unknown,
             }
         } else {
