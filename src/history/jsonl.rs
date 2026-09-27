@@ -1036,6 +1036,43 @@ mod tests {
             Some(b"same\nnew\ntail\n".to_vec())
         );
     }
+    #[test]
+    fn blank_lines_separate_numbered_diff_blocks() {
+        // Real OMP shape: elided jumps appear as blank separators between
+        // context blocks; an empty content line keeps its ` 2|` marker.
+        let diff = " 1|a\n\n 3|c\n+4|d\n\n 6|\n+8|z\n";
+        let patch = numbered_patch(diff).unwrap();
+        assert_eq!(
+            Change::Unified(patch).apply(b"a\nb\nc\ne\nx\n\nf\n"),
+            Some(b"a\nb\nc\nd\ne\nx\n\nz\nf\n".to_vec())
+        );
+    }
+    #[test]
+    fn silent_number_gaps_split_blocks() {
+        // Real OMP shape: some producers elide lines without a blank line; the
+        // absolute numbers are the only contiguity signal.
+        let diff = " 1|a\n 2|b\n-3|c\n+3|C\n 5|e\n 6|f\n";
+        assert_eq!(
+            Change::Unified(numbered_patch(diff).unwrap()).apply(b"a\nb\nc\nd\ne\nf\n"),
+            Some(b"a\nb\nC\nd\ne\nf\n".to_vec())
+        );
+    }
+    #[test]
+    fn single_sided_blocks_anchor_through_delta() {
+        // `-`/context numbers are old-file lines, `+` numbers are new-file
+        // lines; a block missing one side anchors via the cumulative delta,
+        // not the other side's raw number.
+        let insert = "-1|a\n+1|A\n+2|B\n 2|b\n 3|c\n 4|d\n\n+6|x\n";
+        assert_eq!(
+            Change::Unified(numbered_patch(insert).unwrap()).apply(b"a\nb\nc\nd\ne\n"),
+            Some(b"A\nB\nb\nc\nd\nx\ne\n".to_vec())
+        );
+        let delete = "+1|z\n 1|a\n 2|b\n\n-3|c\n-4|d\n";
+        assert_eq!(
+            Change::Unified(numbered_patch(delete).unwrap()).apply(b"a\nb\nc\nd\ne\n"),
+            Some(b"z\na\nb\ne\n".to_vec())
+        );
+    }
 
     #[test]
     fn structured_results_preserve_eof_markers() {
