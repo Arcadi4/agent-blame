@@ -350,14 +350,17 @@ impl Repo {
         };
         // Unrelated commits do not change the preimage. Bound stale evidence
         // by the last change to this file, using Git's resolved pre-rename path.
-        // A prior deletion/emptying is also a boundary; only a new path has none.
+        // The author time reflects when that change was made; the committer
+        // time is only when it was recorded and lags behind the edits staged
+        // into it. A prior deletion/emptying is also a boundary; only a new
+        // path has none.
         let preimage_time = if parents.len() == 1 {
             let output = checked(
                 command(&self.root)
                     .args([
                         "log",
                         "-1",
-                        "--format=%ct",
+                        "--format=%at",
                         &String::from_utf8_lossy(parents[0]),
                         "--",
                     ])
