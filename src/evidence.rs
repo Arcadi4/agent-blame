@@ -275,7 +275,7 @@ pub fn attribute(
     }
     let started = session.started;
     let updated = history.updated.or(session.updated);
-    if !forward && !started.is_some_and(|t| t <= target.commit_time) {
+    if !forward && started.is_none_or(|t| t > target.commit_time) {
         return result;
     }
     let now = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;

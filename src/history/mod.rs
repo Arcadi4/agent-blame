@@ -301,7 +301,7 @@ impl<'a> Search<'a> {
                 if candidate.updated.is_some_and(|t| t <= target.commit_time) {
                     continue;
                 }
-            } else if !candidate.started.is_some_and(|t| t <= target.commit_time) {
+            } else if candidate.started.is_none_or(|t| t > target.commit_time) {
                 continue;
             }
             if !forward

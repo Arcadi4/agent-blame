@@ -220,7 +220,7 @@ pub fn render(
                             }
                             None => true,
                         };
-                        let heading = if same_author {
+                        if same_author {
                             let ids = shown.iter().map(|(oid, _)| oid.clone()).collect::<Vec<_>>();
                             let author = shown
                                 .first()
@@ -234,11 +234,11 @@ pub fn render(
                         } else {
                             let mut groups: Vec<(Vec<String>, String)> = Vec::new();
                             for (oid, author) in &shown {
-                                if let Some((ids, previous_author)) = groups.last_mut() {
-                                    if previous_author == author {
-                                        ids.push(oid.clone());
-                                        continue;
-                                    }
+                                if let Some((ids, previous_author)) = groups.last_mut()
+                                    && previous_author == author
+                                {
+                                    ids.push(oid.clone());
+                                    continue;
                                 }
                                 groups.push((vec![oid.clone()], author.clone()));
                             }
@@ -250,8 +250,7 @@ pub fn render(
                                 entries.push(format!("and {more} more"));
                             }
                             entries.join("; ")
-                        };
-                        heading
+                        }
                     };
                     if color {
                         writeln!(out, "{}", heading.yellow())?;
