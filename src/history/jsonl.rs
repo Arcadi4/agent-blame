@@ -742,7 +742,7 @@ pub(super) fn load(
                 }
                 if envelope.kind == "model_change" {
                     let v: Value = serde_json::from_slice(&buffer)?;
-                    c.set_model(v["modelId"].as_str());
+                    c.set_model(string(&v, &["modelId", "model"]));
                     if let Some(id) = v["id"].as_str() {
                         branches.insert(id.into(), c.model.clone());
                     }
