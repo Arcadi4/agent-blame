@@ -389,50 +389,78 @@ pub(super) fn structured_patch(value: &Value) -> Option<String> {
     (!result.is_empty()).then_some(result)
 }
 
-fn numbered_patch(diff: &str) -> Option<String> {
-    let mut result = String::new();
-    let mut old_start = None;
-    let mut new_start = None;
-    let mut old_count = 0;
-    let mut new_count = 0;
-    let mut body = String::new();
-    let mut delta: isize = 0;
-    // ` ` and `-` carry old-file line numbers, `+` carries new-file numbers.
-    // A block missing one side is anchored through the cumulative delta at the
-    // block's start; inferring it from the other side's number alone breaks
-    // once earlier blocks changed the line count.
-    let mut block_delta: isize = 0;
-    let flush = |result: &mut String,
-                 body: &mut String,
-                 a: &mut Option<usize>,
-                 b: &mut Option<usize>,
-                 ac: &mut usize,
-                 bc: &mut usize,
-                 block_delta: isize|
-     -> Option<()> {
-        if body.is_empty() {
+/// One contiguous numbered-diff region. ` ` and `-` lines carry old-file line
+/// numbers, `+` lines carry new-file numbers; both sides must stay contiguous
+/// inside a region, and a missing side anchors through the cumulative delta at
+/// the region's start.
+#[derive(Default)]
+struct NumberedBlock {
+    old_start: Option<usize>,
+    new_start: Option<usize>,
+    old_count: usize,
+    new_count: usize,
+    next_old: Option<usize>,
+    next_new: Option<usize>,
+    body: String,
+}
+
+impl NumberedBlock {
+    fn flush(&mut self, out: &mut String, block_delta: isize) -> Option<()> {
+        if self.body.is_empty() {
             return Some(());
         }
-        let old = if a.is_some() {
-            (*a)?
+        let old = if self.old_count > 0 {
+            self.old_start?
         } else {
             // Pure insertion: 0-based anchor before the next old line.
-            (*b)?.saturating_sub(1).checked_add_signed(-block_delta)?
+            self.new_start?
+                .saturating_sub(1)
+                .checked_add_signed(-block_delta)?
         };
-        let new = if b.is_some() {
-            (*b)?
+        let new = if self.new_count > 0 {
+            self.new_start?
         } else {
             // Pure deletion: 0-based anchor at the current new position.
-            (*a)?.saturating_sub(1).checked_add_signed(block_delta)?
+            self.old_start?
+                .saturating_sub(1)
+                .checked_add_signed(block_delta)?
         };
-        result.push_str(&format!("@@ -{},{} +{},{} @@\n{}", old, ac, new, bc, body));
-        body.clear();
-        *a = None;
-        *b = None;
-        *ac = 0;
-        *bc = 0;
+        out.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n{}",
+            old, self.old_count, new, self.new_count, self.body
+        ));
+        self.old_start = None;
+        self.new_start = None;
+        self.old_count = 0;
+        self.new_count = 0;
+        self.next_old = None;
+        self.next_new = None;
+        self.body.clear();
         Some(())
-    };
+    }
+
+    fn push_line(&mut self, sign: u8, text: &str, old: Option<usize>, new: Option<usize>) {
+        if let Some(n) = old {
+            self.old_start.get_or_insert(n);
+            self.old_count += 1;
+            self.next_old = Some(n + 1);
+        }
+        if let Some(n) = new {
+            self.new_start.get_or_insert(n);
+            self.new_count += 1;
+            self.next_new = Some(n + 1);
+        }
+        self.body.push(sign as char);
+        self.body.push_str(text);
+        self.body.push('\n');
+    }
+}
+
+fn numbered_patch(diff: &str) -> Option<String> {
+    let mut result = String::new();
+    let mut block = NumberedBlock::default();
+    let mut delta: isize = 0;
+    let mut block_delta: isize = 0;
     for raw in diff.lines() {
         let sign = match raw.as_bytes().first().copied() {
             Some(sign) => sign,
@@ -440,15 +468,7 @@ fn numbered_patch(diff: &str) -> Option<String> {
             // content: an empty content line keeps its number marker. Flush
             // like any other unnumbered line instead of aborting the parse.
             None => {
-                flush(
-                    &mut result,
-                    &mut body,
-                    &mut old_start,
-                    &mut new_start,
-                    &mut old_count,
-                    &mut new_count,
-                    block_delta,
-                )?;
+                block.flush(&mut result, block_delta)?;
                 continue;
             }
         };
@@ -459,15 +479,7 @@ fn numbered_patch(diff: &str) -> Option<String> {
                 .first()
                 .is_some_and(u8::is_ascii_digit)
         {
-            flush(
-                &mut result,
-                &mut body,
-                &mut old_start,
-                &mut new_start,
-                &mut old_count,
-                &mut new_count,
-                block_delta,
-            )?;
+            block.flush(&mut result, block_delta)?;
             continue;
         }
         let text = raw[1..].trim_start();
@@ -476,39 +488,35 @@ fn numbered_patch(diff: &str) -> Option<String> {
         let text = text[digits..]
             .strip_prefix('|')
             .or_else(|| text[digits..].strip_prefix(' '))?;
-        if body.is_empty() {
+        let old_number = (sign != b'+').then_some(number);
+        let new_number = match sign {
+            b'+' => Some(number),
+            b' ' => Some(number.checked_add_signed(delta)?),
+            _ => None,
+        };
+        // Numbered lines are absolute. A gap on either side means the producer
+        // elided lines here (with or without a blank separator), so the block
+        // must end: offsets inside a block are contiguous by definition.
+        if old_number
+            .zip(block.next_old)
+            .is_some_and(|(n, expected)| n != expected)
+            || new_number
+                .zip(block.next_new)
+                .is_some_and(|(n, expected)| n != expected)
+        {
+            block.flush(&mut result, block_delta)?;
+        }
+        if block.body.is_empty() {
             block_delta = delta;
         }
-        if sign != b'+' {
-            old_start.get_or_insert(number);
-            old_count += 1;
-        }
-        if sign != b'-' {
-            new_start.get_or_insert(if sign == b' ' {
-                number.checked_add_signed(delta)?
-            } else {
-                number
-            });
-            new_count += 1;
-        }
+        block.push_line(sign, text, old_number, new_number);
         if sign == b'+' {
             delta += 1;
         } else if sign == b'-' {
             delta -= 1;
         }
-        body.push(sign as char);
-        body.push_str(text);
-        body.push('\n');
     }
-    flush(
-        &mut result,
-        &mut body,
-        &mut old_start,
-        &mut new_start,
-        &mut old_count,
-        &mut new_count,
-        block_delta,
-    )?;
+    block.flush(&mut result, block_delta)?;
     (!result.is_empty()).then_some(result)
 }
 
@@ -1028,6 +1036,7 @@ mod tests {
             Some(b"same\nnew\ntail\n".to_vec())
         );
     }
+
     #[test]
     fn structured_results_preserve_eof_markers() {
         let value = serde_json::json!([{"oldStart":1,"oldLines":1,"newStart":1,"newLines":1,"lines":["-old","+new","\\ No newline at end of file"]}]);
