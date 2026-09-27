@@ -656,6 +656,18 @@ mod tests {
     }
 
     #[test]
+    fn byte_proved_regions_ignore_commit_decomposition() {
+        // Adjacent changed lines form one committed op while the record keeps
+        // them as separate blocks; the bytes at both exact positions still
+        // prove each region.
+        let t = target("a\nb\n", "X\nY\n");
+        let patch = Change::Unified("@@ -1,1 +1,1 @@\n-a\n+X\n\n@@ -2,1 +2,1 @@\n-b\n+Y\n".into());
+        let found = run(&t, vec![patch.clone(), patch]);
+        let mut lines: Vec<_> = found.keys().copied().collect();
+        lines.sort_unstable();
+        assert_eq!(lines, vec![0, 1]);
+    }
+    #[test]
     fn tool_fallback_keeps_only_the_responsible_model_and_time() {
         let t = target("old\nsame\n", "new\nsame\n");
         let history = History {
