@@ -288,6 +288,45 @@ fn explicit_revision_blames_files_removed_from_the_worktree() {
 }
 
 #[test]
+fn stale_bounds_follow_the_previous_change_author_time() {
+    let f = Fixture::new();
+    let mid = "mid\n";
+    let third = "third\n";
+    let rows = vec![
+        json!({"type":"session","version":3,"id":"native-omp","cwd":f.root,"timestamp":"2020-01-01T00:00:00Z"}),
+        json!({"type":"model_change","id":"model","model":"fixture-model","timestamp":"2020-01-01T00:00:00Z"}),
+        json!({"type":"message","id":"request1","parentId":"model","timestamp":"2020-01-01T00:20:00Z","message":{"role":"assistant","model":"fixture-model","content":[{"type":"toolCall","id":"call1","name":"edit","arguments":{"path":"a.txt","oldText":"intent","newText":"intent"}}]}}),
+        json!({"type":"message","id":"result1","parentId":"request1","timestamp":"2020-01-01T00:20:00Z","message":{"role":"toolResult","toolCallId":"call1","isError":false,"details":{"path":"a.txt","oldText":AFTER,"newText":mid}}}),
+        json!({"type":"message","id":"request2","parentId":"model","timestamp":"2020-01-01T00:30:00Z","message":{"role":"assistant","model":"fixture-model","content":[{"type":"toolCall","id":"call2","name":"edit","arguments":{"path":"a.txt","oldText":"intent","newText":"intent"}}]}}),
+        json!({"type":"message","id":"result2","parentId":"request2","timestamp":"2020-01-01T00:30:00Z","message":{"role":"toolResult","toolCallId":"call2","isError":false,"details":{"path":"a.txt","oldText":mid,"newText":third}}}),
+    ];
+    f.install("omp", &rows);
+    // Both edits are staged before either commit is recorded; recording time
+    // must not decide which edits belong to which commit.
+    fs::write(f.root.join("a.txt"), mid).unwrap();
+    record(&f, "first", "2020-01-01T00:25:00Z", "2020-01-01T00:50:00Z");
+    fs::write(f.root.join("a.txt"), third).unwrap();
+    record(&f, "second", "2020-01-01T00:35:00Z", "2020-01-01T00:55:00Z");
+    let blamed = f.git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let out = f.text(&["--agent=omp", "--style=porcelain", &blamed, "--", "a.txt"]);
+    assert!(out.contains("agent \"omp\""));
+    assert!(out.contains("session-id \"native-omp\""));
+}
+
+fn record(f: &Fixture, message: &str, author: &str, committer: &str) {
+    let o = Command::new("git")
+        .current_dir(&f.root)
+        .args(["-c", "core.hooksPath=/dev/null", "commit", "-qam", message])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_DATE", author)
+        .env("GIT_COMMITTER_DATE", committer)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+#[test]
 fn session_lookup_obeys_time_and_fork_relationships() {
     let f = Fixture::new();
     for (id, time) in [
