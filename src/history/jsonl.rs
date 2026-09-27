@@ -397,24 +397,35 @@ fn numbered_patch(diff: &str) -> Option<String> {
     let mut new_count = 0;
     let mut body = String::new();
     let mut delta: isize = 0;
+    // ` ` and `-` carry old-file line numbers, `+` carries new-file numbers.
+    // A block missing one side is anchored through the cumulative delta at the
+    // block's start; inferring it from the other side's number alone breaks
+    // once earlier blocks changed the line count.
+    let mut block_delta: isize = 0;
     let flush = |result: &mut String,
                  body: &mut String,
                  a: &mut Option<usize>,
                  b: &mut Option<usize>,
                  ac: &mut usize,
-                 bc: &mut usize|
+                 bc: &mut usize,
+                 block_delta: isize|
      -> Option<()> {
         if body.is_empty() {
             return Some(());
         }
-        result.push_str(&format!(
-            "@@ -{},{} +{},{} @@\n{}",
-            (*a).or_else(|| b.map(|n| n.saturating_sub(1)))?,
-            ac,
-            (*b).or_else(|| a.map(|n| n.saturating_sub(1)))?,
-            bc,
-            body
-        ));
+        let old = if a.is_some() {
+            (*a)?
+        } else {
+            // Pure insertion: 0-based anchor before the next old line.
+            (*b)?.saturating_sub(1).checked_add_signed(-block_delta)?
+        };
+        let new = if b.is_some() {
+            (*b)?
+        } else {
+            // Pure deletion: 0-based anchor at the current new position.
+            (*a)?.saturating_sub(1).checked_add_signed(block_delta)?
+        };
+        result.push_str(&format!("@@ -{},{} +{},{} @@\n{}", old, ac, new, bc, body));
         body.clear();
         *a = None;
         *b = None;
@@ -436,6 +447,7 @@ fn numbered_patch(diff: &str) -> Option<String> {
                     &mut new_start,
                     &mut old_count,
                     &mut new_count,
+                    block_delta,
                 )?;
                 continue;
             }
@@ -454,6 +466,7 @@ fn numbered_patch(diff: &str) -> Option<String> {
                 &mut new_start,
                 &mut old_count,
                 &mut new_count,
+                block_delta,
             )?;
             continue;
         }
@@ -463,6 +476,9 @@ fn numbered_patch(diff: &str) -> Option<String> {
         let text = text[digits..]
             .strip_prefix('|')
             .or_else(|| text[digits..].strip_prefix(' '))?;
+        if body.is_empty() {
+            block_delta = delta;
+        }
         if sign != b'+' {
             old_start.get_or_insert(number);
             old_count += 1;
@@ -491,6 +507,7 @@ fn numbered_patch(diff: &str) -> Option<String> {
         &mut new_start,
         &mut old_count,
         &mut new_count,
+        block_delta,
     )?;
     (!result.is_empty()).then_some(result)
 }
