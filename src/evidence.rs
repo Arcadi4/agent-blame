@@ -64,6 +64,16 @@ fn bytes_at(lines: &[&[u8]], start: usize, want: &[Vec<u8>]) -> bool {
         .is_some_and(|got| got.iter().zip(want).all(|(a, b)| *a == b.as_slice()))
 }
 
+/// An insertion records no preimage bytes, so its position needs an anchor:
+/// an unchanged neighbouring line, or a parent that really was empty.
+fn insert_anchored(before: &[&[u8]], after: &[&[u8]], hunk: &Hunk) -> bool {
+    before.is_empty()
+        || (hunk.old_start > 0
+            && hunk.new_start > 0
+            && before.get(hunk.old_start - 1) == after.get(hunk.new_start - 1))
+        || before.get(hunk.old_start) == after.get(hunk.new_start + hunk.new.len())
+}
+
 pub fn diff(before: &[u8], after: &[u8]) -> Vec<Hunk> {
     let old = lines(before);
     let new = lines(after);
@@ -405,10 +415,15 @@ pub fn attribute(
         for hunk in &hunks {
             // Compare the actual changed block, including both coordinates and
             // bytes. Unchanged context and a matching added string alone are
-            // not evidence; equal bytes at both exact positions are.
-            let matches = hunk.old != hunk.new
-                && bytes_at(&before_lines, hunk.old_start, &hunk.old)
-                && bytes_at(&after_lines, hunk.new_start, &hunk.new);
+            // not evidence; equal bytes at both exact positions are, and the
+            // commit's own decomposition stays admissible proof.
+            let matches = committed.contains(hunk)
+                || (hunk.old != hunk.new
+                    && bytes_at(&before_lines, hunk.old_start, &hunk.old)
+                    && bytes_at(&after_lines, hunk.new_start, &hunk.new)
+                    && (hunk.new.is_empty()
+                        || !hunk.old.is_empty()
+                        || insert_anchored(&before_lines, &after_lines, hunk)));
             for &line in requested {
                 if result.matched.contains_key(&line) || result.blocked.contains_key(&line) {
                     continue;
