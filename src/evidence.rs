@@ -596,6 +596,48 @@ mod tests {
     }
 
     #[test]
+    fn length_changing_hunk_does_not_shadow_same_edit_regions() {
+        // The duplicated edit breaks reconstruction exactly like retried tool
+        // calls do; the fallback must still attribute every region of the edit.
+        let t = target("a\nb\nkeep\nz\n", "X\nx2\nx3\nkeep\nY\n");
+        let snapshot = Change::Snapshot {
+            before: t.before.clone(),
+            after: t.after.clone(),
+        };
+        let history = History {
+            edits: vec![
+                Edit {
+                    time: Some(50),
+                    model: Some("model".into()),
+                    change: snapshot.clone(),
+                },
+                Edit {
+                    time: Some(50),
+                    model: Some("model".into()),
+                    change: snapshot,
+                },
+            ],
+            ..History::default()
+        };
+        let found = attribute(
+            &t,
+            &[0, 1, 2, 4],
+            &Session {
+                agent: Agent::Omp,
+                id: Some("s"),
+                started: Some(10),
+                updated: Some(90),
+            },
+            &history,
+            false,
+        )
+        .matched;
+        let mut lines: Vec<_> = found.keys().copied().collect();
+        lines.sort_unstable();
+        assert_eq!(lines, vec![0, 1, 2, 4]);
+    }
+
+    #[test]
     fn tool_fallback_keeps_only_the_responsible_model_and_time() {
         let t = target("old\nsame\n", "new\nsame\n");
         let history = History {
