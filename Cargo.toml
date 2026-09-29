@@ -24,6 +24,15 @@ zstd = "0.14"
 [dev-dependencies]
 tempfile = "3"
 
+# Debug info is the most expensive part of an unoptimized build, and a
+# backtrace only needs this crate's line tables to name a source line.
+# Dependency debug info is never read, so none of it is generated.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 strip = true
