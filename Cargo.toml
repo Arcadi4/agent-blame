@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "The git blame of agents. See who's to blame for this slop code."
 license = "Apache-2.0"
+repository = "https://github.com/Arcadi4/agent-blame"
 
 [dependencies]
 anyhow = "1"
@@ -36,4 +37,3 @@ debug = false
 [profile.release]
 lto = "thin"
 strip = true
-
